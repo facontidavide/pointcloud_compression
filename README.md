@@ -14,3 +14,14 @@ Run this app on an existing rosbag containing a `sensors_msgs/PointCloud2` messa
 In [Releases](https://github.com/facontidavide/pointcloud_compression/releases), you should find an AppImage that can run directly in Ubuntu 22.04.
 
 First command line argument is the path to the rosbag.
+
+Expected output (example):
+
+```
+Topic: /lidars/bpearl_back_left
+  Count: 908
+  Lossless Average time: 4163 usec
+  Lossless Average ratio: 0.645825
+  Lossy Average time: 2365 usec
+  Lossy Average ratio: 0.319284
+```
