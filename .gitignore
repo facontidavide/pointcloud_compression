@@ -2,3 +2,4 @@
 /codec/build/*
 /codec/CMakeLists.txt
 /codec/codec.cpp
+/codec/CMakeLists.txt.user
