@@ -11,11 +11,7 @@
 #include <rclcpp/serialization.hpp>
 #include <rclcpp/serialized_message.hpp>
 #include <rosbag2_cpp/reader.hpp>
-#include <pcl/io/pcd_io.h>
 
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
-#include <pcl_conversions/pcl_conversions.h>
 
 #include "codec.hpp"
 #include "zstd.h"
@@ -31,19 +27,7 @@ struct Stats
   double lossless_total_ratio = 0;
 };
 
-void PackPoints(const pcl::PointCloud<pcl::PointXYZI> &cloud,
-                std::vector<float> &buffer) {
 
-  buffer.reserve(cloud.size() * 4);
-  buffer.clear();
-
-  for (const auto &p : cloud.points) {
-    buffer.push_back(p.x);
-    buffer.push_back(p.y);
-    buffer.push_back(p.z);
-    buffer.push_back(p.intensity);
-  }
-}
 
 int main(int argc, char **argv) {
   if (argc != 2) {
@@ -65,10 +49,10 @@ int main(int argc, char **argv) {
     if(it.type == "sensor_msgs/msg/PointCloud2")
     {
       stats[it.name] = Stats();
+      std::cout << "Found PointCloud2 topic: " << it.name << std::endl;
     }
   }
  
-  std::vector<float> pack_buffer;
   std::vector<char> lossy_buffer;
   std::vector<char> compressed_buffer;
 
@@ -82,34 +66,49 @@ int main(int argc, char **argv) {
     }
 
     rclcpp::SerializedMessage serialized_msg(*msg->serialized_data);
-    sensor_msgs::msg::PointCloud2 ros_msg;
+    auto ros_msg = std::make_shared<sensor_msgs::msg::PointCloud2>();
 
-    serialization.deserialize_message(&serialized_msg, &ros_msg);
+    serialization.deserialize_message(&serialized_msg, ros_msg.get());
 
-    if(ros_msg.fields.size() != 4 || ros_msg.fields[0].name != "x" || 
-       ros_msg.fields[1].name != "y" || ros_msg.fields[2].name != "z" || 
-       ros_msg.fields[3].name != "intensity")
+    const bool isXYZ = ros_msg->fields.size() == 3;
+    const bool isXYZI = ros_msg->fields.size() == 4 && ros_msg->fields[3].name == "intensity";
+
+
+    if(!isXYZ && !isXYZI)
     {
-      std::cout << "Excluding " << msg->topic_name << " because we only support PointXYZI currently" << std::endl;
+      std::cout << "Excluding " << msg->topic_name << " because we only support PointXYZ and PointXYZI currently" << std::endl;
       stats.erase(msg->topic_name);
       continue;
     }
-
+   
     auto& stat = stats[msg->topic_name];
-
-    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(
-        new pcl::PointCloud<pcl::PointXYZI>);
-    pcl::fromROSMsg(ros_msg, *cloud);
-
     stat.count++;
+    // straightforward ZSTD compression of ros_msg->data
+    {
+      auto t_start = std::chrono::high_resolution_clock::now();
+
+      int max_dst_size = ZSTD_compressBound(ros_msg->data.size());
+      compressed_buffer.resize(max_dst_size);
+      auto new_size = ZSTD_compress(compressed_buffer.data(), max_dst_size, ros_msg->data.data(), ros_msg->data.size(), 1);
+
+      auto t_end = std::chrono::high_resolution_clock::now();
+      auto usec = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
+
+      stat.lossless_total_ratio += double(new_size) / double(ros_msg->data.size());
+      stat.lossless_total_time_usec += usec;
+    }
+    // first step: lossy compression. 
+    // second step: ZSTD compression
     {
       auto t_start = std::chrono::high_resolution_clock::now();
       const float resolution = 0.001;
 
-      PackPoints(*cloud, pack_buffer);
-
-      lossy_buffer.resize(pack_buffer.size() * sizeof(float));
-      int lossy_size = CompressPointXYZI(resolution, pack_buffer.data(), pack_buffer.size(), lossy_buffer.data());
+      lossy_buffer.resize(ros_msg->data.size());
+      auto* data_float = reinterpret_cast<float*>(ros_msg->data.data());
+      size_t size_float = (ros_msg->data.size()) / sizeof(float);
+      int lossy_size = isXYZ ?
+          CompressPointXYZ(resolution, data_float, size_float, lossy_buffer.data()) : 
+          CompressPointXYZI(resolution, data_float, size_float, lossy_buffer.data());
       lossy_buffer.resize(lossy_size);
 
       int max_dst_size = ZSTD_compressBound(lossy_buffer.size());
@@ -119,24 +118,8 @@ int main(int argc, char **argv) {
       auto t_end = std::chrono::high_resolution_clock::now();
       auto usec = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
 
-      stat.lossy_total_ratio += double(new_size) / double(ros_msg.data.size());
+      stat.lossy_total_ratio += double(new_size) / double(ros_msg->data.size());
       stat.lossy_total_time_usec += usec;
-    }
- 
-    {
-      auto t_start = std::chrono::high_resolution_clock::now();
-      PackPoints(*cloud, pack_buffer);
-
-      const size_t src_size = pack_buffer.size() * sizeof(float);
-      int max_dst_size = ZSTD_compressBound(src_size);
-      compressed_buffer.resize(max_dst_size);
-      auto new_size = ZSTD_compress(compressed_buffer.data(), max_dst_size, pack_buffer.data(), src_size, 1);
-
-      auto t_end = std::chrono::high_resolution_clock::now();
-      auto usec = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
-
-      stat.lossless_total_ratio += double(new_size) / double(ros_msg.data.size());
-      stat.lossless_total_time_usec += usec;
     }
   }
 

@@ -9,7 +9,6 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
-find_package(pcl_ros REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(benchmark REQUIRED)
 
@@ -23,7 +22,7 @@ endif()
 add_subdirectory(zstd)
 
 add_executable(benchmark_rosbag src/bag_reader.cpp)
-ament_target_dependencies(benchmark_rosbag rclcpp rosbag2_cpp pcl_ros sensor_msgs)
+ament_target_dependencies(benchmark_rosbag rclcpp rosbag2_cpp sensor_msgs)
 target_link_libraries(benchmark_rosbag libzstd_static)
 target_link_libraries(benchmark_rosbag ${CMAKE_CURRENT_SOURCE_DIR}/codec/libpcl_codec.a)
 target_include_directories(benchmark_rosbag 

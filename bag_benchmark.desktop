@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PCL Compression benchmark
+Exec=benchmark_rosbag
+Icon=bag_benchmark
+Comment=test pointcloud compression
+Terminal=false
+Categories=Development;
