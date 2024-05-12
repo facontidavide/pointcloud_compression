@@ -19,15 +19,18 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
-add_subdirectory(zstd)
+add_subdirectory(3rdparty/lz4)
+add_subdirectory(3rdparty/zstd)
 
 add_executable(benchmark_rosbag src/bag_reader.cpp)
 ament_target_dependencies(benchmark_rosbag rclcpp rosbag2_cpp sensor_msgs)
-target_link_libraries(benchmark_rosbag libzstd_static)
+target_link_libraries(benchmark_rosbag libzstd_static lz4_static)
 target_link_libraries(benchmark_rosbag ${CMAKE_CURRENT_SOURCE_DIR}/codec/libpcl_codec.a)
+
 target_include_directories(benchmark_rosbag 
   PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/zstd
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/lz4
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/zstd
     ${CMAKE_CURRENT_SOURCE_DIR}/codec
 )
 

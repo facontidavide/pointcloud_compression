@@ -4,9 +4,19 @@
 extern "C" {
 #endif
 
-int CompressPointXYZ(float resolution, float* input_vector, int input_size, void* output);
+enum PointType
+{
+    Undefined = 0,
+    POINT_XYZ = 1,
+    POINT_XYZI = 2,
+    POINT_OUSTER = 3
+};
 
-int CompressPointXYZI(float resolution, float* input_vector, int input_size, void* output);
+int LossyPointcloudCompression(PointType type, float resolution,
+                               unsigned char* input_vector,
+                               int input_size,
+                               unsigned char* output);
+
 
 #ifdef __cplusplus
 }

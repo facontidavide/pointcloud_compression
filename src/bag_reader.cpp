@@ -15,18 +15,40 @@
 
 #include "codec.hpp"
 #include "zstd.h"
+#include "lz4.h"
 
 struct Stats
 {
   int count = 0;
 
-  long lossy_total_time_usec = 0;
-  long lossless_total_time_usec = 0;
+  long zstd_total_time = 0;
+  long lz4_total_time = 0;
 
-  double lossy_total_ratio = 0;
-  double lossless_total_ratio = 0;
+  long lossy_zstd_total_time = 0;
+  long lossy_lz4_total_time = 0;
+
+  double zstd_total_ratio = 0;
+  double lz4_total_ratio = 0;
+
+  double lossy_zstd_total_ratio = 0;
+  double lossy_lz4_total_ratio = 0;
 };
 
+int GetSizeZSTD(const std::vector<uint8_t>& input)
+{
+  static std::vector<char> compressed_buffer;
+  int max_size = ZSTD_compressBound(input.size());
+  compressed_buffer.resize(max_size);
+  return ZSTD_compress(compressed_buffer.data(), max_size, input.data(), input.size(), 1);
+}
+
+int GetSizeLZ4(const std::vector<uint8_t>& input)
+{
+  static std::vector<char> compressed_buffer;
+  int max_size = LZ4_compressBound(input.size());
+  compressed_buffer.resize(max_size);
+  return LZ4_compress_default((const char*)input.data(), compressed_buffer.data(), input.size(), max_size);
+}
 
 
 int main(int argc, char **argv) {
@@ -53,8 +75,7 @@ int main(int argc, char **argv) {
     }
   }
  
-  std::vector<char> lossy_buffer;
-  std::vector<char> compressed_buffer;
+  std::vector<uint8_t> lossy_buffer;
 
   while (rclcpp::ok() && reader.has_next()) {
 
@@ -70,67 +91,82 @@ int main(int argc, char **argv) {
 
     serialization.deserialize_message(&serialized_msg, ros_msg.get());
 
-    const bool isXYZ = ros_msg->fields.size() == 3;
-    const bool isXYZI = ros_msg->fields.size() == 4 && ros_msg->fields[3].name == "intensity";
-
-
-    if(!isXYZ && !isXYZI)
+    PointType type = Undefined;
+    if( ros_msg->fields.size() == 3 )
     {
-      std::cout << "Excluding " << msg->topic_name << " because we only support PointXYZ and PointXYZI currently" << std::endl;
+      type = POINT_XYZ;
+    }
+    else if( ros_msg->fields.size() == 4 && ros_msg->fields[3].name == "intensity" )
+    {
+      type = POINT_XYZI;
+    }
+    else
+    {
+      std::cout << "Excluding " << msg->topic_name << " because the point type is not supported" << std::endl;
       stats.erase(msg->topic_name);
       continue;
     }
+
    
     auto& stat = stats[msg->topic_name];
     stat.count++;
+
+    auto DurationUsec = [](const auto& diff) -> long
+    {
+      return std::chrono::duration_cast<std::chrono::microseconds>(diff).count();
+    };
+
     // straightforward ZSTD compression of ros_msg->data
     {
-      auto t_start = std::chrono::high_resolution_clock::now();
+      auto t1 = std::chrono::high_resolution_clock::now(); 
+      int new_size = GetSizeZSTD(ros_msg->data);
+      auto t2 = std::chrono::high_resolution_clock::now();
 
-      int max_dst_size = ZSTD_compressBound(ros_msg->data.size());
-      compressed_buffer.resize(max_dst_size);
-      auto new_size = ZSTD_compress(compressed_buffer.data(), max_dst_size, ros_msg->data.data(), ros_msg->data.size(), 1);
-
-      auto t_end = std::chrono::high_resolution_clock::now();
-      auto usec = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
-
-      stat.lossless_total_ratio += double(new_size) / double(ros_msg->data.size());
-      stat.lossless_total_time_usec += usec;
+      stat.zstd_total_ratio += double(new_size) / double(ros_msg->data.size());
+      stat.zstd_total_time += DurationUsec(t2 - t1);
     }
-    // first step: lossy compression. 
-    // second step: ZSTD compression
+    // straightforward LZ4 compression of ros_msg->data
     {
-      auto t_start = std::chrono::high_resolution_clock::now();
-      const float resolution = 0.001;
+      auto t1 = std::chrono::high_resolution_clock::now(); 
+      int new_size = GetSizeLZ4(ros_msg->data);
+      auto t2 = std::chrono::high_resolution_clock::now();
 
+      stat.lz4_total_ratio += double(new_size) / double(ros_msg->data.size());
+      stat.lz4_total_time += DurationUsec(t2 - t1);
+    }
+    // Lossy + compressions
+    const float resolution = 0.001;
+    {
+      auto t1 = std::chrono::high_resolution_clock::now();
+      
       lossy_buffer.resize(ros_msg->data.size());
-      auto* data_float = reinterpret_cast<float*>(ros_msg->data.data());
-      size_t size_float = (ros_msg->data.size()) / sizeof(float);
-      int lossy_size = isXYZ ?
-          CompressPointXYZ(resolution, data_float, size_float, lossy_buffer.data()) : 
-          CompressPointXYZI(resolution, data_float, size_float, lossy_buffer.data());
+      int lossy_size = LossyPointcloudCompression(type, resolution, ros_msg->data.data(), ros_msg->data.size(), lossy_buffer.data());
       lossy_buffer.resize(lossy_size);
 
-      int max_dst_size = ZSTD_compressBound(lossy_buffer.size());
-      compressed_buffer.resize(max_dst_size);
-      auto new_size = ZSTD_compress(compressed_buffer.data(), max_dst_size, lossy_buffer.data(), lossy_buffer.size(), 1);
+      auto t2 = std::chrono::high_resolution_clock::now();
+      auto new_size_zstd = GetSizeZSTD(lossy_buffer);
+      auto t3 = std::chrono::high_resolution_clock::now();
+      auto new_size_lz4 = GetSizeLZ4(lossy_buffer);
+      auto t4 = std::chrono::high_resolution_clock::now();
 
-      auto t_end = std::chrono::high_resolution_clock::now();
-      auto usec = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
+      stat.lossy_zstd_total_ratio += double(new_size_zstd) / double(ros_msg->data.size());
+      stat.lossy_zstd_total_time += DurationUsec( (t2 - t1) + (t3 - t2) );
 
-      stat.lossy_total_ratio += double(new_size) / double(ros_msg->data.size());
-      stat.lossy_total_time_usec += usec;
+      stat.lossy_lz4_total_ratio += double(new_size_lz4) / double(ros_msg->data.size());
+      stat.lossy_lz4_total_time += DurationUsec( (t2 - t1) + (t4 - t3) );
     }
   }
 
   for (const auto& [topic, stat]: stats)    
   {
+    double dcount = double(stat.count);
     std::cout << "\nTopic: " << topic << std::endl;
     std::cout << "  Count: " << stat.count << std::endl;
-    std::cout << "  Lossless Average time: " << stat.lossless_total_time_usec / stat.count << " usec" << std::endl;
-    std::cout << "  Lossless Average ratio: " << stat.lossless_total_ratio / double(stat.count) << std::endl;
-    std::cout << "  Lossy Average time: " << stat.lossy_total_time_usec / stat.count << " usec" << std::endl;
-    std::cout << "  Lossy Average ratio: " << stat.lossy_total_ratio / double(stat.count) << std::endl;
+    printf("[LZ4]  ratio: %.3f time (usec): %ld\n", stat.lz4_total_ratio / dcount, stat.lz4_total_time / stat.count);
+    printf("[ZSTD] ratio: %.3f time (usec): %ld\n", stat.zstd_total_ratio / dcount, stat.zstd_total_time / stat.count);
+
+    printf("[Lossy + LZ4]  ratio: %.3f time (usec): %ld\n", stat.lossy_lz4_total_ratio / dcount, stat.lossy_lz4_total_time / stat.count);
+    printf("[Lossy + ZSTD] ratio: %.3f time (usec): %ld\n", stat.lossy_zstd_total_ratio / dcount, stat.lossy_zstd_total_time / stat.count);
   }
 
   return 0;
