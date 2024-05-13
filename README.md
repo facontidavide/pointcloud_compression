@@ -40,10 +40,11 @@ Expected output (example):
 ```
 Topic: /pandar_xt_32_0_lidar
   Count: 100
-  [LZ4]  ratio: 0.529 time (usec): 2664
-  [ZSTD] ratio: 0.474 time (usec): 5521
-  [Lossy + LZ4]  ratio: 0.230 time (usec): 3348
-  [Lossy + ZSTD] ratio: 0.197 time (usec): 4568
+  [LZ4]  ratio: 0.529 time (usec): 2533
+  [ZSTD] ratio: 0.474 time (usec): 5412
+  [Lossy]        ratio: 0.393 time (usec): 1716
+  [Lossy + LZ4]  ratio: 0.234 time (usec): 2869
+  [Lossy + ZSTD] ratio: 0.200 time (usec): 4006
 ```
 
 ## About the Lossy compression

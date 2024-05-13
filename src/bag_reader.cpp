@@ -17,21 +17,21 @@
 #include "zstd.h"
 #include "lz4.h"
 
+struct StatsData
+{
+  long total_time = 0;
+  double total_ratio = 0;
+};
+
 struct Stats
 {
   int count = 0;
 
-  long zstd_total_time = 0;
-  long lz4_total_time = 0;
-
-  long lossy_zstd_total_time = 0;
-  long lossy_lz4_total_time = 0;
-
-  double zstd_total_ratio = 0;
-  double lz4_total_ratio = 0;
-
-  double lossy_zstd_total_ratio = 0;
-  double lossy_lz4_total_ratio = 0;
+  StatsData zstd;
+  StatsData lz4;
+  StatsData lossy;
+  StatsData lossy_lz4;
+  StatsData lossy_zstd;
 };
 
 int GetSizeZSTD(const std::vector<uint8_t>& input)
@@ -122,8 +122,8 @@ int main(int argc, char **argv) {
       int new_size = GetSizeZSTD(ros_msg->data);
       auto t2 = std::chrono::high_resolution_clock::now();
 
-      stat.zstd_total_ratio += double(new_size) / double(ros_msg->data.size());
-      stat.zstd_total_time += DurationUsec(t2 - t1);
+      stat.zstd.total_ratio += double(new_size) / double(ros_msg->data.size());
+      stat.zstd.total_time += DurationUsec(t2 - t1);
     }
     // straightforward LZ4 compression of ros_msg->data
     {
@@ -131,8 +131,8 @@ int main(int argc, char **argv) {
       int new_size = GetSizeLZ4(ros_msg->data);
       auto t2 = std::chrono::high_resolution_clock::now();
 
-      stat.lz4_total_ratio += double(new_size) / double(ros_msg->data.size());
-      stat.lz4_total_time += DurationUsec(t2 - t1);
+      stat.lz4.total_ratio += double(new_size) / double(ros_msg->data.size());
+      stat.lz4.total_time += DurationUsec(t2 - t1);
     }
     // Lossy + compressions
     const float resolution = 0.001;
@@ -149,11 +149,14 @@ int main(int argc, char **argv) {
       auto new_size_lz4 = GetSizeLZ4(lossy_buffer);
       auto t4 = std::chrono::high_resolution_clock::now();
 
-      stat.lossy_zstd_total_ratio += double(new_size_zstd) / double(ros_msg->data.size());
-      stat.lossy_zstd_total_time += DurationUsec( (t2 - t1) + (t3 - t2) );
+      stat.lossy.total_ratio += double(lossy_size) / double(ros_msg->data.size());
+      stat.lossy.total_time += DurationUsec( (t2 - t1) );
 
-      stat.lossy_lz4_total_ratio += double(new_size_lz4) / double(ros_msg->data.size());
-      stat.lossy_lz4_total_time += DurationUsec( (t2 - t1) + (t4 - t3) );
+      stat.lossy_zstd.total_ratio += double(new_size_zstd) / double(ros_msg->data.size());
+      stat.lossy_zstd.total_time += DurationUsec( (t2 - t1) + (t3 - t2) );
+
+      stat.lossy_lz4.total_ratio += double(new_size_lz4) / double(ros_msg->data.size());
+      stat.lossy_lz4.total_time += DurationUsec( (t2 - t1) + (t4 - t3) );
     }
   }
 
@@ -162,11 +165,12 @@ int main(int argc, char **argv) {
     double dcount = double(stat.count);
     std::cout << "\nTopic: " << topic << std::endl;
     std::cout << "  Count: " << stat.count << std::endl;
-    printf("[LZ4]  ratio: %.3f time (usec): %ld\n", stat.lz4_total_ratio / dcount, stat.lz4_total_time / stat.count);
-    printf("[ZSTD] ratio: %.3f time (usec): %ld\n", stat.zstd_total_ratio / dcount, stat.zstd_total_time / stat.count);
+    printf("  [LZ4]  ratio: %.3f time (usec): %ld\n", stat.lz4.total_ratio / dcount, stat.lz4.total_time / stat.count);
+    printf("  [ZSTD] ratio: %.3f time (usec): %ld\n", stat.zstd.total_ratio / dcount, stat.zstd.total_time / stat.count);
 
-    printf("[Lossy + LZ4]  ratio: %.3f time (usec): %ld\n", stat.lossy_lz4_total_ratio / dcount, stat.lossy_lz4_total_time / stat.count);
-    printf("[Lossy + ZSTD] ratio: %.3f time (usec): %ld\n", stat.lossy_zstd_total_ratio / dcount, stat.lossy_zstd_total_time / stat.count);
+    printf("  [Lossy]        ratio: %.3f time (usec): %ld\n", stat.lossy.total_ratio / dcount, stat.lossy.total_time / stat.count);
+    printf("  [Lossy + LZ4]  ratio: %.3f time (usec): %ld\n", stat.lossy_lz4.total_ratio / dcount, stat.lossy_lz4.total_time / stat.count);
+    printf("  [Lossy + ZSTD] ratio: %.3f time (usec): %ld\n", stat.lossy_zstd.total_ratio / dcount, stat.lossy_zstd.total_time / stat.count);
   }
 
   return 0;
