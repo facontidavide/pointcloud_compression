@@ -34,6 +34,22 @@ struct Stats
   StatsData lossy_zstd;
 };
 
+void ConvertFields(const sensor_msgs::msg::PointCloud2& msg, std::vector<Field>& fields, float resolution)
+{
+  fields.clear();
+  for (const auto& field: msg.fields)
+  {
+    Field f;
+    f.type = static_cast<FieldType>(field.datatype);
+    f.offset = field.offset;
+    if(f.type == FieldType::FLOAT32 && (field.name == "x" || field.name == "y" || field.name == "z"))
+    {
+      f.mult = 1.0 / resolution;
+    }
+    fields.push_back(f);
+  }
+}
+
 int GetSizeZSTD(const std::vector<uint8_t>& input)
 {
   static std::vector<char> compressed_buffer;
@@ -76,6 +92,13 @@ int main(int argc, char **argv) {
   }
  
   std::vector<uint8_t> lossy_buffer;
+  std::vector<Field> fields;
+
+  if(stats.empty())
+  {
+    std::cerr << "No PointCloud2 topics found in the bag" << std::endl;
+    return 1;
+  }
 
   while (rclcpp::ok() && reader.has_next()) {
 
@@ -90,23 +113,6 @@ int main(int argc, char **argv) {
     auto ros_msg = std::make_shared<sensor_msgs::msg::PointCloud2>();
 
     serialization.deserialize_message(&serialized_msg, ros_msg.get());
-
-    PointType type = Undefined;
-    if( ros_msg->fields.size() == 3 )
-    {
-      type = POINT_XYZ;
-    }
-    else if( ros_msg->fields.size() == 4 && ros_msg->fields[3].name == "intensity" )
-    {
-      type = POINT_XYZI;
-    }
-    else
-    {
-      std::cout << "Excluding " << msg->topic_name << " because the point type is not supported" << std::endl;
-      stats.erase(msg->topic_name);
-      continue;
-    }
-
    
     auto& stat = stats[msg->topic_name];
     stat.count++;
@@ -138,9 +144,16 @@ int main(int argc, char **argv) {
     const float resolution = 0.001;
     {
       auto t1 = std::chrono::high_resolution_clock::now();
-      
+      ConvertFields(*ros_msg, fields, resolution);
+
       lossy_buffer.resize(ros_msg->data.size());
-      int lossy_size = LossyPointcloudCompression(type, resolution, ros_msg->data.data(), ros_msg->data.size(), lossy_buffer.data());
+
+      int lossy_size = PointcloudCompressionField(
+        {fields.data(), fields.size()}, 
+        ros_msg->point_step,
+        {ros_msg->data.data(), ros_msg->data.size()}, 
+        {lossy_buffer.data(), lossy_buffer.size()});
+
       lossy_buffer.resize(lossy_size);
 
       auto t2 = std::chrono::high_resolution_clock::now();
@@ -165,12 +178,11 @@ int main(int argc, char **argv) {
     double dcount = double(stat.count);
     std::cout << "\nTopic: " << topic << std::endl;
     std::cout << "  Count: " << stat.count << std::endl;
-    printf("  [LZ4]  ratio: %.3f time (usec): %ld\n", stat.lz4.total_ratio / dcount, stat.lz4.total_time / stat.count);
-    printf("  [ZSTD] ratio: %.3f time (usec): %ld\n", stat.zstd.total_ratio / dcount, stat.zstd.total_time / stat.count);
-
-    printf("  [Lossy]        ratio: %.3f time (usec): %ld\n", stat.lossy.total_ratio / dcount, stat.lossy.total_time / stat.count);
-    printf("  [Lossy + LZ4]  ratio: %.3f time (usec): %ld\n", stat.lossy_lz4.total_ratio / dcount, stat.lossy_lz4.total_time / stat.count);
-    printf("  [Lossy + ZSTD] ratio: %.3f time (usec): %ld\n", stat.lossy_zstd.total_ratio / dcount, stat.lossy_zstd.total_time / stat.count);
+    printf("  [LZ4]          ratio: %.2f time (usec): %ld\n", stat.lz4.total_ratio / dcount, stat.lz4.total_time / stat.count);
+    printf("  [ZSTD]         ratio: %.2f time (usec): %ld\n", stat.zstd.total_ratio / dcount, stat.zstd.total_time / stat.count);
+    printf("  [Lossy only]   ratio: %.2f time (usec): %ld\n", stat.lossy.total_ratio / dcount, stat.lossy.total_time / stat.count);
+    printf("  [Lossy + LZ4]  ratio: %.2f time (usec): %ld\n", stat.lossy_lz4.total_ratio / dcount, stat.lossy_lz4.total_time / stat.count);
+    printf("  [Lossy + ZSTD] ratio: %.2f time (usec): %ld\n", stat.lossy_zstd.total_ratio / dcount, stat.lossy_zstd.total_time / stat.count);
   }
 
   return 0;

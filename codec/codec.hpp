@@ -8,14 +8,50 @@ enum PointType
 {
     Undefined = 0,
     POINT_XYZ = 1,
-    POINT_XYZI = 2,
-    POINT_OUSTER = 3
+    POINT_XYZI = 2
 };
 
-int LossyPointcloudCompression(PointType type, float resolution,
-                               unsigned char* input_vector,
-                               int input_size,
-                               unsigned char* output);
+enum class FieldType
+{
+    INT8    = 1,
+    UINT8   = 2,
+    INT16   = 3,
+    UINT16  = 4,
+    INT32   = 5,
+    UINT32  = 6,
+    FLOAT32 = 7,
+    FLOAT64 = 8
+};
+
+#pragma pack(push, 1)
+struct Field
+{
+    FieldType type;
+    int offset = 0;
+    double mult = 1.0;
+};
+#pragma pack(pop)
+
+struct FieldVectorView
+{
+    Field* fields = nullptr;
+    unsigned long size = 0;
+};
+
+struct BufferView
+{
+    unsigned char* data = nullptr;
+    unsigned long size = 0;
+};
+
+int PointcloudCompressionField(FieldVectorView fields,
+                               int point_step,
+                               BufferView input,
+                               BufferView output);
+
+int PointcloudCompression(PointType type, float resolution,
+                          BufferView input,
+                          BufferView output);
 
 
 #ifdef __cplusplus

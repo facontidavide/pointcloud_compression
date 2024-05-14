@@ -40,9 +40,9 @@ Expected output (example):
 ```
 Topic: /pandar_xt_32_0_lidar
   Count: 100
-  [LZ4]  ratio: 0.529 time (usec): 2533
-  [ZSTD] ratio: 0.474 time (usec): 5412
-  [Lossy]        ratio: 0.393 time (usec): 1716
+  [LZ4]          ratio: 0.529 time (usec): 2533
+  [ZSTD]         ratio: 0.474 time (usec): 5412
+  [Lossy only ]  ratio: 0.393 time (usec): 1716
   [Lossy + LZ4]  ratio: 0.234 time (usec): 2869
   [Lossy + ZSTD] ratio: 0.200 time (usec): 4006
 ```
