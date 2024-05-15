@@ -253,8 +253,8 @@ int main(int argc, char **argv) {
       encoder.SetSpeedOptions(0, 0);
       // Hard to decide if 14 bits is equivalent or not to 3 decimal places :(
       // this might affect the compression ratio and make the comparison unfair
-      encoder.SetAttributeQuantization(draco::GeometryAttribute::POSITION, 14);
-      encoder.SetAttributeQuantization(draco::GeometryAttribute::GENERIC, 14);
+      encoder.SetAttributeQuantization(draco::GeometryAttribute::POSITION, 16);
+      encoder.SetAttributeQuantization(draco::GeometryAttribute::GENERIC, 16);
       encoder.SetEncodingMethod(draco::POINT_CLOUD_KD_TREE_ENCODING);     
 
       draco::EncoderBuffer encode_buffer;
