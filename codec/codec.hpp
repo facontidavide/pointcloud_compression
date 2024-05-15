@@ -23,14 +23,12 @@ enum class FieldType
     FLOAT64 = 8
 };
 
-#pragma pack(push, 1)
 struct Field
 {
     FieldType type;
     int offset = 0;
     double mult = 1.0;
 };
-#pragma pack(pop)
 
 struct FieldVectorView
 {

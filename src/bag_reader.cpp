@@ -17,6 +17,10 @@
 #include "zstd.h"
 #include "lz4.h"
 
+#include <draco/compression/expert_encode.h>
+#include <draco/compression/encode.h>
+#include <draco/point_cloud/point_cloud_builder.h>
+
 struct StatsData
 {
   long total_time = 0;
@@ -32,6 +36,7 @@ struct Stats
   StatsData lossy;
   StatsData lossy_lz4;
   StatsData lossy_zstd;
+  StatsData draco;
 };
 
 void ConvertFields(const sensor_msgs::msg::PointCloud2& msg, std::vector<Field>& fields, float resolution)
@@ -42,10 +47,18 @@ void ConvertFields(const sensor_msgs::msg::PointCloud2& msg, std::vector<Field>&
     Field f;
     f.type = static_cast<FieldType>(field.datatype);
     f.offset = field.offset;
-    if(f.type == FieldType::FLOAT32 && (field.name == "x" || field.name == "y" || field.name == "z"))
+    // apply the resolution multiplier to position channels
+    if((f.type == FieldType::FLOAT32 || f.type == FieldType::FLOAT64) &&
+       (field.name == "x" || field.name == "y" || field.name == "z"))
     {
       f.mult = 1.0 / resolution;
     }
+    // special field found in Hesai Lidar driver
+    if(f.type == FieldType::FLOAT64 && field.name == "timestamp")
+    {
+      f.mult = 1e6; // convert to microseconds resolution
+    }
+
     fields.push_back(f);
   }
 }
@@ -64,6 +77,36 @@ int GetSizeLZ4(const std::vector<uint8_t>& input)
   int max_size = LZ4_compressBound(input.size());
   compressed_buffer.resize(max_size);
   return LZ4_compress_default((const char*)input.data(), compressed_buffer.data(), input.size(), max_size);
+}
+
+// works only if one of the first 3 field is not finite
+void RemoveInvalidPoints(const std::vector<uint8_t>& input, 
+                         int point_step,
+                         std::vector<uint8_t>& output)
+{
+  auto* ptr_end = input.data() + input.size();
+  output.resize(input.size());
+
+  auto* out_ptr = output.data();
+
+  for(auto ptr = input.data();  ptr < ptr_end; ptr += point_step)
+  {
+    bool valid = true;
+    for(size_t f=0; f<3; f++)
+    {
+      if(!std::isfinite(*reinterpret_cast<const float*>(ptr)))
+      {
+        valid = false;
+        break;
+      }
+    }
+    if(valid)
+    {
+      memcpy(out_ptr, ptr, point_step);
+      out_ptr += point_step;
+    }
+  }
+  output.resize( out_ptr - output.data() );
 }
 
 
@@ -93,6 +136,7 @@ int main(int argc, char **argv) {
  
   std::vector<uint8_t> lossy_buffer;
   std::vector<Field> fields;
+  std::vector<uint8_t> clean_buffer;
 
   if(stats.empty())
   {
@@ -114,6 +158,8 @@ int main(int argc, char **argv) {
 
     serialization.deserialize_message(&serialized_msg, ros_msg.get());
    
+    RemoveInvalidPoints(ros_msg->data, ros_msg->point_step, clean_buffer);
+
     auto& stat = stats[msg->topic_name];
     stat.count++;
 
@@ -125,7 +171,7 @@ int main(int argc, char **argv) {
     // straightforward ZSTD compression of ros_msg->data
     {
       auto t1 = std::chrono::high_resolution_clock::now(); 
-      int new_size = GetSizeZSTD(ros_msg->data);
+      int new_size = GetSizeZSTD(clean_buffer);
       auto t2 = std::chrono::high_resolution_clock::now();
 
       stat.zstd.total_ratio += double(new_size) / double(ros_msg->data.size());
@@ -134,24 +180,24 @@ int main(int argc, char **argv) {
     // straightforward LZ4 compression of ros_msg->data
     {
       auto t1 = std::chrono::high_resolution_clock::now(); 
-      int new_size = GetSizeLZ4(ros_msg->data);
+      int new_size = GetSizeLZ4(clean_buffer);
       auto t2 = std::chrono::high_resolution_clock::now();
 
       stat.lz4.total_ratio += double(new_size) / double(ros_msg->data.size());
       stat.lz4.total_time += DurationUsec(t2 - t1);
     }
-    // Lossy + compressions
-    const float resolution = 0.001;
+    // // Lossy + compressions
+    const float resolution = 0.0001;
     {
       auto t1 = std::chrono::high_resolution_clock::now();
       ConvertFields(*ros_msg, fields, resolution);
 
-      lossy_buffer.resize(ros_msg->data.size());
+      lossy_buffer.resize(clean_buffer.size());
 
       int lossy_size = PointcloudCompressionField(
         {fields.data(), fields.size()}, 
         ros_msg->point_step,
-        {ros_msg->data.data(), ros_msg->data.size()}, 
+        {clean_buffer.data(), clean_buffer.size()}, 
         {lossy_buffer.data(), lossy_buffer.size()});
 
       lossy_buffer.resize(lossy_size);
@@ -171,7 +217,59 @@ int main(int argc, char **argv) {
       stat.lossy_lz4.total_ratio += double(new_size_lz4) / double(ros_msg->data.size());
       stat.lossy_lz4.total_time += DurationUsec( (t2 - t1) + (t4 - t3) );
     }
+
+    // only PointXYZ and PointXYZI are supported here, to keep it simple
+    if( ros_msg->point_step == 16 )
+    {
+      auto t1 = std::chrono::high_resolution_clock::now();
+      draco::PointCloudBuilder builder;
+
+      uint64_t number_of_points = clean_buffer.size() / ros_msg->point_step;
+      builder.Start(static_cast<unsigned int>(number_of_points));
+
+      auto* data_ptr = clean_buffer.data();
+
+      for(const auto& field: ros_msg->fields)
+      {
+        if(field.name == "x" || field.name == "y" || field.name == "z")
+        {
+          int att_id = builder.AddAttribute(draco::GeometryAttribute::POSITION, 1, draco::DataType::DT_FLOAT32);
+          builder.SetAttributeValuesForAllPoints(att_id, data_ptr + field.offset, ros_msg->point_step);
+        }
+        else
+        {
+          int att_id = builder.AddAttribute(draco::GeometryAttribute::GENERIC, 1, draco::DataType::DT_FLOAT32);
+          builder.SetAttributeValuesForAllPoints(att_id, data_ptr + field.offset, ros_msg->point_step);
+        }
+      }
+
+      int att_i = builder.AddAttribute(draco::GeometryAttribute::GENERIC, 1, draco::DataType::DT_FLOAT32);
+      builder.SetAttributeValuesForAllPoints(att_i, data_ptr + 12, 16);
+
+      std::unique_ptr<draco::PointCloud> pc = builder.Finalize(false);
+
+      if (!pc) {
+        throw std::runtime_error("Conversion from sensor_msgs::msg::PointCloud2 to Draco::PointCloud failed");
+      }
+
+      draco::Encoder encoder;
+      encoder.SetSpeedOptions(0, 0);
+      encoder.SetAttributeQuantization(draco::GeometryAttribute::POSITION, 16);
+      encoder.SetAttributeQuantization(draco::GeometryAttribute::GENERIC, 16);
+      encoder.SetEncodingMethod(draco::POINT_CLOUD_KD_TREE_ENCODING);     
+
+      draco::EncoderBuffer encode_buffer;
+      draco::Status status = encoder.EncodePointCloudToBuffer(*pc, &encode_buffer);
+
+      uint32_t new_size = static_cast<uint32_t>(encode_buffer.size());
+      auto t2 = std::chrono::high_resolution_clock::now();
+
+      stat.draco.total_ratio += double(new_size) / double(ros_msg->data.size());
+      stat.draco.total_time += DurationUsec(t2 - t1);
+    }
+
   }
+
 
   for (const auto& [topic, stat]: stats)    
   {
@@ -180,9 +278,12 @@ int main(int argc, char **argv) {
     std::cout << "  Count: " << stat.count << std::endl;
     printf("  [LZ4]          ratio: %.2f time (usec): %ld\n", stat.lz4.total_ratio / dcount, stat.lz4.total_time / stat.count);
     printf("  [ZSTD]         ratio: %.2f time (usec): %ld\n", stat.zstd.total_ratio / dcount, stat.zstd.total_time / stat.count);
+    printf("  [Draco]        ratio: %.2f time (usec): %ld\n", stat.draco.total_ratio / dcount, stat.draco.total_time / stat.count);
     printf("  [Lossy only]   ratio: %.2f time (usec): %ld\n", stat.lossy.total_ratio / dcount, stat.lossy.total_time / stat.count);
     printf("  [Lossy + LZ4]  ratio: %.2f time (usec): %ld\n", stat.lossy_lz4.total_ratio / dcount, stat.lossy_lz4.total_time / stat.count);
     printf("  [Lossy + ZSTD] ratio: %.2f time (usec): %ld\n", stat.lossy_zstd.total_ratio / dcount, stat.lossy_zstd.total_time / stat.count);
+
+
   }
 
   return 0;
