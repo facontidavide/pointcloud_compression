@@ -251,7 +251,7 @@ int main(int argc, char **argv) {
 
       draco::Encoder encoder;
       encoder.SetSpeedOptions(0, 0);
-      // Hard to decide if 14 bits is equivalent or not to 3 decimal places :(
+      // Hard to decide if 16 bits is equivalent or not to a resolution of 1mm
       // this might affect the compression ratio and make the comparison unfair
       encoder.SetAttributeQuantization(draco::GeometryAttribute::POSITION, 16);
       encoder.SetAttributeQuantization(draco::GeometryAttribute::GENERIC, 16);
