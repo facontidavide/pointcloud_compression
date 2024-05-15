@@ -187,7 +187,7 @@ int main(int argc, char **argv) {
       stat.lz4.total_time += DurationUsec(t2 - t1);
     }
     // // Lossy + compressions
-    const float resolution = 0.0001;
+    const float resolution = 0.001;
     {
       auto t1 = std::chrono::high_resolution_clock::now();
       ConvertFields(*ros_msg, fields, resolution);
@@ -243,9 +243,6 @@ int main(int argc, char **argv) {
         }
       }
 
-      int att_i = builder.AddAttribute(draco::GeometryAttribute::GENERIC, 1, draco::DataType::DT_FLOAT32);
-      builder.SetAttributeValuesForAllPoints(att_i, data_ptr + 12, 16);
-
       std::unique_ptr<draco::PointCloud> pc = builder.Finalize(false);
 
       if (!pc) {
@@ -254,8 +251,10 @@ int main(int argc, char **argv) {
 
       draco::Encoder encoder;
       encoder.SetSpeedOptions(0, 0);
-      encoder.SetAttributeQuantization(draco::GeometryAttribute::POSITION, 16);
-      encoder.SetAttributeQuantization(draco::GeometryAttribute::GENERIC, 16);
+      // Hard to decide if 14 bits is equivalent or not to 3 decimal places :(
+      // this might affect the compression ratio and make the comparison unfair
+      encoder.SetAttributeQuantization(draco::GeometryAttribute::POSITION, 14);
+      encoder.SetAttributeQuantization(draco::GeometryAttribute::GENERIC, 14);
       encoder.SetEncodingMethod(draco::POINT_CLOUD_KD_TREE_ENCODING);     
 
       draco::EncoderBuffer encode_buffer;
