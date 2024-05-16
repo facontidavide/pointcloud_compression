@@ -58,14 +58,13 @@ void ConvertFields(const sensor_msgs::msg::PointCloud2& msg, std::vector<Field>&
     {
       f.mult = 1e6; // convert to microseconds resolution
     }
-
     fields.push_back(f);
   }
 }
 
 int GetSizeZSTD(const std::vector<uint8_t>& input)
 {
-  static std::vector<char> compressed_buffer;
+  thread_local std::vector<char> compressed_buffer;
   int max_size = ZSTD_compressBound(input.size());
   compressed_buffer.resize(max_size);
   return ZSTD_compress(compressed_buffer.data(), max_size, input.data(), input.size(), 1);
@@ -73,7 +72,7 @@ int GetSizeZSTD(const std::vector<uint8_t>& input)
 
 int GetSizeLZ4(const std::vector<uint8_t>& input)
 {
-  static std::vector<char> compressed_buffer;
+  thread_local std::vector<char> compressed_buffer;
   int max_size = LZ4_compressBound(input.size());
   compressed_buffer.resize(max_size);
   return LZ4_compress_default((const char*)input.data(), compressed_buffer.data(), input.size(), max_size);
@@ -187,7 +186,7 @@ int main(int argc, char **argv) {
       stat.lz4.total_time += DurationUsec(t2 - t1);
     }
     // // Lossy + compressions
-    const float resolution = 0.001;
+    const float resolution = 0.0001;
     {
       auto t1 = std::chrono::high_resolution_clock::now();
       ConvertFields(*ros_msg, fields, resolution);
@@ -219,7 +218,7 @@ int main(int argc, char **argv) {
     }
 
     // only PointXYZ and PointXYZI are supported here, to keep it simple
-    if( ros_msg->point_step == 16 )
+    if( (ros_msg->point_step == 16 && ros_msg->fields.size() == 4 )|| ros_msg->fields.size() == 3)
     {
       auto t1 = std::chrono::high_resolution_clock::now();
       draco::PointCloudBuilder builder;
@@ -236,7 +235,7 @@ int main(int argc, char **argv) {
           int att_id = builder.AddAttribute(draco::GeometryAttribute::POSITION, 1, draco::DataType::DT_FLOAT32);
           builder.SetAttributeValuesForAllPoints(att_id, data_ptr + field.offset, ros_msg->point_step);
         }
-        else
+        else if(field.name == "intensity")
         {
           int att_id = builder.AddAttribute(draco::GeometryAttribute::GENERIC, 1, draco::DataType::DT_FLOAT32);
           builder.SetAttributeValuesForAllPoints(att_id, data_ptr + field.offset, ros_msg->point_step);
@@ -269,7 +268,6 @@ int main(int argc, char **argv) {
 
   }
 
-
   for (const auto& [topic, stat]: stats)    
   {
     double dcount = double(stat.count);
@@ -281,9 +279,6 @@ int main(int argc, char **argv) {
     printf("  [Lossy only]   ratio: %.2f time (usec): %ld\n", stat.lossy.total_ratio / dcount, stat.lossy.total_time / stat.count);
     printf("  [Lossy + LZ4]  ratio: %.2f time (usec): %ld\n", stat.lossy_lz4.total_ratio / dcount, stat.lossy_lz4.total_time / stat.count);
     printf("  [Lossy + ZSTD] ratio: %.2f time (usec): %ld\n", stat.lossy_zstd.total_ratio / dcount, stat.lossy_zstd.total_time / stat.count);
-
-
   }
-
   return 0;
 }
